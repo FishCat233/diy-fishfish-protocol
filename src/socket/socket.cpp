@@ -1,14 +1,10 @@
 #include "socket.h"
 
-#include <iostream>
 #include <cstring>
+#include <iostream>
 #include <system_error>
 
 #ifdef _WIN32
-
-// ---------------------------------------------------------------------------
-// ServiceGuard
-// ---------------------------------------------------------------------------
 
 ServiceGuard &ServiceGuard::getInstance() {
     static ServiceGuard instance;
@@ -30,10 +26,6 @@ ServiceGuard::~ServiceGuard() {
         std::cerr << "Failed to cleanup winsock" << std::endl;
     }
 }
-
-// ---------------------------------------------------------------------------
-// InetAddress
-// ---------------------------------------------------------------------------
 
 InetAddress::InetAddress() {
     std::memset(&m_addr, 0, sizeof(m_addr));
@@ -80,8 +72,10 @@ void InetAddress::setLen(socklen_t len) {
 
 InetAddressType InetAddress::getType() const {
     switch (m_addr.ss_family) {
-    case AF_INET:  return InetAddressType::IPv4;
-    case AF_INET6: return InetAddressType::IPv6;
+    case AF_INET:
+        return InetAddressType::IPv4;
+    case AF_INET6:
+        return InetAddressType::IPv6;
     default:
         throw std::runtime_error("Invalid address type");
     }
@@ -89,27 +83,25 @@ InetAddressType InetAddress::getType() const {
 
 InetAddress InetAddress::any(InetAddressType type, uint16_t port) {
     switch (type) {
-    case InetAddressType::IPv4: return InetAddress("0.0.0.0", port);
-    case InetAddressType::IPv6: return InetAddress("::", port);
+    case InetAddressType::IPv4:
+        return InetAddress("0.0.0.0", port);
+    case InetAddressType::IPv6:
+        return InetAddress("::", port);
     default:
         throw std::runtime_error("Invalid address type");
     }
 }
 
-// ---------------------------------------------------------------------------
-// Socket
-// ---------------------------------------------------------------------------
-
-Socket::Socket(SocketType type, InetAddress addr) {
+Socket::Socket(SocketType type, InetAddressType addrType = InetAddressType::IPv4) {
     ServiceGuard::getInstance();
 
     SOCKET sock;
     switch (type) {
     case SocketType::TCP:
-        sock = socket(static_cast<int>(addr.getType()), SOCK_STREAM, 0);
+        sock = socket(static_cast<int>(addrType), SOCK_STREAM, 0);
         break;
     case SocketType::UDP:
-        sock = socket(static_cast<int>(addr.getType()), SOCK_DGRAM, 0);
+        sock = socket(static_cast<int>(addrType), SOCK_DGRAM, 0);
         break;
     default:
         throw std::runtime_error("Invalid socket type");
@@ -145,8 +137,8 @@ Socket::~Socket() {
     close();
 }
 
-void Socket::bindAddress(InetAddress addr) {
-    if (bind(m_sock, addr.getSockAddr(), addr.getLen()) == SOCKET_ERROR) {
+void Socket::bind(InetAddress addr) {
+    if (::bind(m_sock, addr.getSockAddr(), addr.getLen()) == SOCKET_ERROR) {
         throw std::system_error(
             WSAGetLastError(),
             std::system_category(),
@@ -154,9 +146,18 @@ void Socket::bindAddress(InetAddress addr) {
     }
 }
 
-Socket Socket::acceptSocket(InetAddress &addr) {
+void Socket::listen(int backlog = SOMAXCONN) {
+    if (::listen(m_sock, backlog) == SOCKET_ERROR) {
+        throw std::system_error(
+            WSAGetLastError(),
+            std::system_category(),
+            "Failed to listen socket");
+    }
+}
+
+Socket Socket::accept(InetAddress &addr) {
     socklen_t addrLen = addr.getLen();
-    SOCKET sock = accept(m_sock, addr.getSockAddr(), &addrLen);
+    SOCKET sock = ::accept(m_sock, addr.getSockAddr(), &addrLen);
     if (sock == INVALID_SOCKET) {
         throw std::system_error(
             WSAGetLastError(),
@@ -167,8 +168,44 @@ Socket Socket::acceptSocket(InetAddress &addr) {
     return Socket(sock);
 }
 
+void Socket::send(const void *buf, size_t len) {
+    if (::send(m_sock, reinterpret_cast<const char *>(buf), len, 0) == SOCKET_ERROR) {
+        throw std::system_error(
+            WSAGetLastError(),
+            std::system_category(),
+            "Failed to send data");
+    }
+}
+
+void Socket::recv(void *buf, size_t len) {
+    if (::recv(m_sock, reinterpret_cast<char *>(buf), len, 0) == SOCKET_ERROR) {
+        throw std::system_error(
+            WSAGetLastError(),
+            std::system_category(),
+            "Failed to receive data");
+    }
+}
+
+void Socket::setOption(int level, int optionName, const void *optionValue, socklen_t optionLen) {
+    if (setsockopt(m_sock, level, optionName, static_cast<const char *>(optionValue), optionLen) == SOCKET_ERROR) {
+        throw std::system_error(
+            WSAGetLastError(),
+            std::system_category(),
+            "Failed to set socket option");
+    }
+}
+
+Socket::operator bool() const noexcept {
+    return m_sock != INVALID_SOCKET;
+}
+
+bool Socket::operator!() const noexcept {
+    return m_sock == INVALID_SOCKET;
+}
+
 void Socket::close() noexcept {
-    if (m_sock == INVALID_SOCKET) return;
+    if (m_sock == INVALID_SOCKET)
+        return;
     if (closesocket(m_sock) == SOCKET_ERROR) {
         std::cerr << "Failed to close socket: " << WSAGetLastError() << std::endl;
     }
@@ -176,13 +213,35 @@ void Socket::close() noexcept {
 
 Socket::Socket(SOCKET sock) : m_sock(sock) {}
 
-// ---------------------------------------------------------------------------
-// Listener / Receiver (stubs)
-// ---------------------------------------------------------------------------
+Listener::Listener(SocketType type, const InetAddress &addr, int backlog)
+    : sock(type, addr.getType()) {
+    sock.bind(addr);
+    sock.listen(backlog);
+}
 
-Listener::Listener(SocketType type, InetAddress addr, int backlog)
-    : sock(type, addr) {}
+Listener::~Listener() {}
+Listener::Listener(Listener &&rhs) : sock(std::move(rhs.sock)) {}
+Listener &Listener::operator=(Listener &&rhs) {
+    if (this != &rhs) {
+        sock = std::move(rhs.sock);
+    }
+    return *this;
+}
 
-Receiver::Receiver(Socket &&sock) : sock(std::move(sock)) {}
+Listener::operator bool() const noexcept {
+    return sock.operator bool();
+}
 
-#endif  // _WIN32
+bool Listener::operator!() const noexcept {
+    return sock.operator!();
+}
+
+Connection Listener::accept(int timeoutMs) {
+    InetAddress addr;
+    auto connectSock = sock.accept(addr);
+    return Connection(std::move(connectSock), std::move(addr));
+}
+
+Connection::Connection(Socket &&sock, InetAddress &&addr) : sock(std::move(sock)), addr(std::move(addr)) {}
+
+#endif // _WIN32

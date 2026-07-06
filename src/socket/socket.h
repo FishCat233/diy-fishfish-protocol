@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <stdexcept>
+#include <string>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -59,7 +59,7 @@ enum class SocketType {
 // Move-only socket wrapper
 class Socket {
 public:
-    Socket(SocketType type, InetAddress addr);
+    Socket(SocketType type, InetAddressType addrType = InetAddressType::IPv4);
     ~Socket();
 
     Socket(const Socket &) = delete;
@@ -68,8 +68,28 @@ public:
     Socket(Socket &&rhs);
     Socket &operator=(Socket &&rhs);
 
-    void bindAddress(InetAddress addr);
-    Socket acceptSocket(InetAddress &addr);
+    void bind(InetAddress addr);
+    void listen(int backlog = SOMAXCONN);
+    Socket accept(InetAddress &addr);
+
+    void send(const void *buf, size_t len);
+    void recv(void *buf, size_t len);
+
+    template <typename T>
+    void send(const T &value);
+
+    template <typename T>
+    void recv(T &value);
+
+    void setOption(int level, int optionName, const void *optionValue, socklen_t optionLen);
+    template <typename T>
+    void setOption(int level, int optionName, const T &value);
+
+    // TODO: it would be good if there are have some more easier option setter methods, such as `setReuseAddr(bool)`.
+    // but im lazy and it just can work now. i wont implement it now.
+
+    explicit operator bool() const noexcept;
+    bool operator!() const noexcept;
 
 private:
     SOCKET m_sock;
@@ -81,20 +101,42 @@ private:
 // TODO: pending implementation
 class Listener {
 public:
-    Listener(SocketType type, InetAddress addr, int backlog);
+    Listener(SocketType type, const InetAddress &addr, int backlog);
+    ~Listener();
+    Listener(const Listener &) = delete;
+    Listener &operator=(const Listener &) = delete;
+    Listener(Listener &&);
+    Listener &operator=(Listener &&);
+
+    explicit operator bool() const noexcept;
+    bool operator!() const noexcept;
+
+    // TODO: docs
+    // TODO: TIMEOUT IS NOT IMPLEMENT NOW.
+    Connection accept(int timeout = -1);
+
 private:
     Socket sock;
 };
 
 // TODO: pending implementation
-class Receiver {
+class Connection {
 public:
-    explicit Receiver(Socket &&sock);
+    explicit Connection(Socket &&sock, InetAddress &&addr);
+
+    template <typename T>
+    void send(const T &value);
+
+    template <typename T>
+    void recv(T &value);
+
 private:
+    // TODO: CACHE FOR RECEIVE AND SEND 'CAUSE TCP JUST SEND A VEEEEEERY SMALL AMOUNT OF DATA AT ONCE :(
     Socket sock;
+    InetAddress addr;
 };
 
-#else  // !_WIN32
+#else // !_WIN32
 
 // TODO: Linux / macOS support
 class Socket {
@@ -104,3 +146,6 @@ private:
 };
 
 #endif
+
+/// FIXME: THERE IS NO LINUX / UNIX VERSION 'CAUSE IM LAZY AND I HAVENT A LINXU DEVICE.
+/// SO PRs ARE WELCOME :)
